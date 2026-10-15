@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>鹈鹕环岛记 · Pelican Isle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a1220; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ── 加载 ── */
+  #loading {
+    position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px;
+    background: radial-gradient(ellipse at 50% 40%, #14304a 0%, #0a1626 70%);
+    color: #cfe3ef; transition: opacity 0.8s;
+  }
+  #loading.done { opacity: 0; pointer-events: none; }
+  #loading .pelican { font-size: 54px; animation: bob 2.2s ease-in-out infinite; }
+  @keyframes bob { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
+  #loadBarWrap { width: min(420px, 70vw); height: 6px; background: rgba(255,255,255,0.12); border-radius: 3px; overflow: hidden; }
+  #loadBar { height: 100%; width: 0; background: linear-gradient(90deg, #f5c542, #ff9a5c); border-radius: 3px; transition: width 0.25s; }
+  #loadLabel { font-size: 13px; opacity: 0.75; letter-spacing: 1px; }
+
+  /* ── 标题 ── */
+  #title {
+    position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: linear-gradient(180deg, rgba(6,14,26,0.55) 0%, rgba(6,14,26,0.15) 40%, rgba(6,14,26,0.65) 100%);
+    opacity: 0; pointer-events: none; transition: opacity 1s;
+  }
+  #title.ready { opacity: 1; pointer-events: auto; }
+  #title.gone { opacity: 0 !important; pointer-events: none !important; }
+  #title h1 {
+    font-size: clamp(44px, 7vw, 84px); font-weight: 800; color: #fff;
+    letter-spacing: 10px; text-shadow: 0 4px 30px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.25);
+  }
+  #title .sub { color: #ffe9b8; font-size: 15px; letter-spacing: 4px; opacity: 0.9; }
+  #title .en { color: rgba(255,255,255,0.45); font-size: 12px; letter-spacing: 6px; text-transform: uppercase; }
+  #startBtn {
+    margin-top: 26px; padding: 15px 58px; font-size: 19px; letter-spacing: 8px; font-weight: 600;
+    color: #22303f; background: linear-gradient(160deg, #ffe9b8, #f5c542);
+    border: none; border-radius: 40px; cursor: pointer;
+    box-shadow: 0 8px 34px rgba(245,197,66,0.4), inset 0 1px 0 rgba(255,255,255,0.6);
+    transition: transform 0.18s, box-shadow 0.18s;
+  }
+  #startBtn:hover { transform: translateY(-3px) scale(1.03); box-shadow: 0 14px 44px rgba(245,197,66,0.55); }
+  #controls {
+    margin-top: 30px; display: grid; grid-template-columns: repeat(4, auto); gap: 8px 26px;
+    color: rgba(255,255,255,0.82); font-size: 12.5px;
+  }
+  #controls b { color: #ffd97a; font-weight: 600; margin-right: 6px; }
+
+  /* ── HUD ── */
+  .chip {
+    position: fixed; z-index: 20; padding: 9px 16px; border-radius: 14px;
+    background: rgba(10, 20, 34, 0.42); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    color: #fff; border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 4px 22px rgba(0,0,0,0.22);
+    user-select: none; pointer-events: none;
+  }
+  #hudFish { top: 18px; left: 18px; font-size: 16px; font-weight: 600; letter-spacing: 1px; }
+  #hudSpeedWrap { top: 18px; right: 18px; text-align: right; }
+  #hudSpeed { font-size: 26px; font-weight: 800; line-height: 1; }
+  #hudSpeedUnit { font-size: 11px; opacity: 0.65; letter-spacing: 2px; }
+  #hudTime { top: 18px; left: 50%; transform: translateX(-50%); font-size: 14px; letter-spacing: 2px; }
+  #hints { bottom: 20px; left: 18px; font-size: 12px; line-height: 1.9; opacity: 0.85; }
+  #hints b { color: #ffd97a; font-weight: 600; }
+  #toast {
+    position: fixed; top: 68px; left: 50%; transform: translate(-50%, -8px); z-index: 30;
+    padding: 10px 24px; border-radius: 30px; font-size: 14.5px; letter-spacing: 2px; color: #fff;
+    background: rgba(12, 22, 38, 0.55); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 217, 122, 0.35);
+    opacity: 0; transition: opacity 0.4s, transform 0.4s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #minimapWrap {
+    position: fixed; right: 18px; bottom: 18px; z-index: 20; padding: 7px; border-radius: 18px;
+    background: rgba(10, 20, 34, 0.42); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.14); transition: opacity 0.3s;
+  }
+  #minimapWrap.hide { opacity: 0; pointer-events: none; }
+  #minimap { display: block; border-radius: 12px; width: 176px; height: 176px; }
+
+  /* ── 电影黑边 / 拍照模式 ── */
+  .bar { position: fixed; left: 0; right: 0; height: 0; background: #000; z-index: 25; transition: height 0.7s cubic-bezier(.7,0,.3,1); }
+  #barTop { top: 0; } #barBot { bottom: 0; }
+  body.photo #barTop, body.photo #barBot { height: 9vh; }
+  body.photo .chip, body.photo #minimapWrap, body.photo #toast, body.photo #hints { opacity: 0 !important; }
+  .chip, #minimapWrap, #hints { transition: opacity 0.4s; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./libs/package/build/three.module.js",
+    "three/addons/": "./libs/package/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="loading">
+  <div class="pelican">🚲</div>
+  <div style="font-size:20px;letter-spacing:6px;">鹈鹕环岛记</div>
+  <div id="loadBarWrap"><div id="loadBar"></div></div>
+  <div id="loadLabel">正在醒来…</div>
+</div>
+
+<div id="title">
+  <div class="en">Pelican Isle · A Cycling Story</div>
+  <h1>鹈鹕环岛记</h1>
+  <div class="sub">一只鹈鹕 · 一辆单车 · 一座会呼吸的岛</div>
+  <button id="startBtn">开始骑行</button>
+  <div id="controls">
+    <span><b>W/↑</b>骑行</span><span><b>S/↓</b>刹车</span><span><b>A D</b>转向</span><span><b>Shift</b>漂移</span>
+    <span><b>Space</b>小跳</span><span><b>C</b>视角</span><span><b>T</b>时间流速</span><span><b>F</b>车铃</span>
+    <span><b>M</b>地图</span><span><b>P</b>拍照模式</span><span><b>R</b>回村</span><span><b>N</b>静音</span>
+  </div>
+</div>
+
+<div id="hudFish" class="chip">🐟 0</div>
+<div id="hudSpeedWrap" class="chip"><div id="hudSpeed">0</div><div id="hudSpeedUnit">KM/H</div></div>
+<div id="hudTime" class="chip">☀ 08:00</div>
+<div id="hints" class="chip"><b>C</b> 视角 · <b>T</b> 时间 · <b>F</b> 车铃 · <b>P</b> 拍照 · <b>Shift</b> 漂移</div>
+<div id="toast"></div>
+<div id="minimapWrap"><canvas id="minimap" width="176" height="176"></canvas></div>
+<div id="barTop" class="bar"></div>
+<div id="barBot" class="bar"></div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
