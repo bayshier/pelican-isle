@@ -13,6 +13,8 @@
 [![复刻规格书](https://img.shields.io/badge/复刻指南-REBUILD_SPEC-ffdd44?style=flat-square)](REBUILD_SPEC.md)
 
 > 🎮 **实机视频与游戏截图**：[配套文章《鹈鹕环岛记》](https://bayshier.github.io/GYZApp/blog-pelican-isle.html)（含 15 分钟昼夜循环实机演示）
+>
+> ▶️ **立即试玩（在线版，无需下载）**：[bayshier.github.io/pelican-isle/](https://bayshier.github.io/pelican-isle/)
 
 </div>
 
