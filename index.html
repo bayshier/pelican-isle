@@ -64,7 +64,7 @@
   #hudFish { top: 18px; left: 18px; font-size: 16px; font-weight: 600; letter-spacing: 1px; }
   #hudSpeedWrap { top: 18px; right: 18px; text-align: right; }
   #hudSpeed { font-size: 26px; font-weight: 800; line-height: 1; }
-  #hudSpeedUnit { font-size: 11px; opacity: 0.65; letter-spacing: 2px; }
+  #hudSpeedUnit { font-size: 12px; opacity: 0.75; letter-spacing: 2px; }
   #hudTime { top: 18px; left: 50%; transform: translateX(-50%); font-size: 14px; letter-spacing: 2px; }
   #hints { bottom: 20px; left: 18px; font-size: 12px; line-height: 1.9; opacity: 0.92; }
   #hints b { color: #c2452d; font-weight: 600; }
@@ -120,6 +120,10 @@
   body.photo #barTop, body.photo #barBot { height: 9vh; }
   body.photo .chip, body.photo #minimapWrap, body.photo #toast, body.photo #hints, body.photo #homeLink { opacity: 0 !important; }
   .chip, #minimapWrap, #hints, #homeLink { transition: opacity 0.4s; }
+  /* 尊重系统的「减少动态效果」:加载页的小车上下浮动等装饰循环停掉 */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; }
+  }
 </style>
 <script type="importmap">
 {
