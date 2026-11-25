@@ -4,7 +4,9 @@ import { C, smoothstep, clamp01, lerp } from './shared.js';
 
 // ── 世界布局常量 ──────────────────────────────────────────────
 export const WORLD_HALF = 1300;      // 地形半宽
-export const WATER_HALF = 2500;      // 海面半宽
+// 海面半宽:必须比雾的远裁剪面(2700)还大 —— 这样海面边缘一定被雾化成雾色,
+// 和穹顶贴着地平线的那一圈(= 雾色)接上,海天交界才不会露出一条缝
+export const WATER_HALF = 4000;
 const R_ISLAND = 950;                // 主岛半径
 
 const polar = (a, r) => ({ x: r * Math.cos(a), z: r * Math.sin(a) });
@@ -206,16 +208,19 @@ export function buildTerrainMesh() {
 
   const colors = new Float32Array(pos.count * 3);
   const c = new THREE.Color();
-  const sand = C('#e6d5a0'), sandWet = C('#c9b283'), deep = C('#173f4a');
-  const grassDry = C('#96a851'), grassLush = C('#3d7a41'), jungle = C('#2e6b39');
-  const rock = C('#8d8579'), rockHi = C('#a39d92'), snow = C('#edf0f2');
-  const dirt = C('#b49668'), dirtWear = C('#a8895f');
+  // 色板(sRGB)。卡通着色下受光面 ≈ 1.4× 固有色、暗面 ≈ 0.5×,所以固有色取"舒服的中间调"
+  const sand = C('#ecd9a2'), sandWet = C('#cdb27c'), deep = C('#1d5660');
+  const grassDry = C('#7fb04a'), grassLush = C('#3f9a4a'), jungle = C('#2a8444');
+  const rock = C('#978c7e'), rockHi = C('#aea598'), snow = C('#f3f5f7');
+  const dirt = C('#c6a574'), dirtWear = C('#b3925f');
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i), y = pos.getY(i);
     const slope = 1 - nrm.getY(i);
     const moist = fbm(x * 0.004 + 21, z * 0.004 - 13, 3) * 0.5 + 0.5;
     const patch = fbm(x * 0.0028 - 31, z * 0.0028 + 17, 2);
+    // 中频斑驳(约 30m 一团):卡通着色下草地是一整片纯色,需要一点深浅才不呆
+    const mottle = fbm(x * 0.035 + 5.5, z * 0.035 - 9.2, 2);
 
     if (y < 0.6) {
       c.copy(sandWet).lerp(deep, clamp01((0.6 - y) / 9));
@@ -234,6 +239,7 @@ export function buildTerrainMesh() {
       const rc = rd < 1.4 ? dirtWear : dirt;
       c.lerp(rc, t * 0.88);
     }
+    if (y > 3.2) c.multiplyScalar(1 + mottle * 0.075);
     const j = 1 + ((Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1) * 0.055;
     colors[i * 3] = Math.min(1, c.r * j); colors[i * 3 + 1] = Math.min(1, c.g * j); colors[i * 3 + 2] = Math.min(1, c.b * j);
   }
@@ -265,36 +271,14 @@ export function buildHeightTexture(N = 256) {
   return tex;
 }
 
-// ── 海面:程序化法线 + 菲涅尔 + 太阳高光 + 岸边泡沫 ───────────
-function makeWaterNormalTexture(size = 256) {
-  const h = new Float32Array(size * size);
-  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) {
-    h[j * size + i] = snoise(i * 0.055, j * 0.055) * 0.65 + snoise(i * 0.13 + 40, j * 0.13 - 9) * 0.35;
-  }
-  const data = new Uint8Array(size * size * 4);
-  const at = (i, j) => h[((j + size) % size) * size + ((i + size) % size)];
-  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) {
-    const nx = (at(i - 1, j) - at(i + 1, j)) * 2.4;
-    const nz = (at(i, j - 1) - at(i, j + 1)) * 2.4;
-    const k = (j * size + i) * 4;
-    data[k] = Math.round(THREE.MathUtils.clamp(nx * 0.5 + 0.5, 0, 1) * 255);
-    data[k + 1] = Math.round(THREE.MathUtils.clamp(nz * 0.5 + 0.5, 0, 1) * 255);
-    data[k + 2] = Math.round((at(i, j) * 0.5 + 0.5) * 255);
-    data[k + 3] = 255;
-  }
-  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.minFilter = tex.magFilter = THREE.LinearFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
-
+// ── 海面:解析波纹法线 + 深浅渐变 + 天色反射 + 太阳高光 + 浪线 + 岸边泡沫 ──
+// v2 起不再用滚动的法线贴图:贴图频率太高,远处一个像素里挤了好几个波,
+// 采样结果帧帧不同 → 海面远处闪成一片。改成解析正弦波,并把高频按视距压掉。
 export function buildWater(heightTex) {
   const geo = new THREE.PlaneGeometry(WATER_HALF * 2, WATER_HALF * 2, 128, 128);
   geo.rotateX(-Math.PI / 2);
   const uniforms = {
     uTime: { value: 0 },
-    uNormalMap: { value: makeWaterNormalTexture() },
     uHeightMap: { value: heightTex },
     uWorldHalf: { value: WORLD_HALF },
     uSunDir: { value: new THREE.Vector3(0.4, 0.6, 0.2).normalize() },
@@ -304,7 +288,7 @@ export function buildWater(heightTex) {
     uShallow: { value: new THREE.Color('#23a3a0') },
   };
   const mat = new THREE.ShaderMaterial({
-    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, uniforms]),
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, uniforms]),   // 开 fog 必须合并雾的 uniform
     transparent: true,
     fog: true,
     depthWrite: false,
@@ -324,45 +308,86 @@ export function buildWater(heightTex) {
         #include <fog_vertex>
       }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D uNormalMap, uHeightMap;
+      uniform sampler2D uHeightMap;
       uniform float uTime, uWorldHalf;
       uniform vec3 uSunDir, uSunColor, uSky, uDeep, uShallow;
       varying vec3 vWorldPos;
       #include <common>
       #include <fog_pars_fragment>
+
+      float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float vnoise(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+                   mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+      }
+
       void main() {
-        vec2 huv = vWorldPos.xz / (uWorldHalf * 2.0) + 0.5;
+        vec2 p = vWorldPos.xz;
+        float camD = length(cameraPosition - vWorldPos);
+        float lod = 1.0 - smoothstep(30.0, 380.0, camD);      // 远处压掉高频
+
+        vec2 huv = p / (uWorldHalf * 2.0) + 0.5;
         float th = texture2D(uHeightMap, huv).x;
         float depth = max(-th, 0.0);
+        float inland = smoothstep(1.6, 0.3, th);               // 离岸渐隐:内陆洼地不画水
 
-        vec2 uv1 = vWorldPos.xz * 0.055 + vec2(uTime * 0.031, uTime * 0.021);
-        vec2 uv2 = vWorldPos.xz * 0.105 - vec2(uTime * 0.026, uTime * 0.018);
-        vec3 n1 = texture2D(uNormalMap, uv1).xyz * 2.0 - 1.0;
-        vec3 n2 = texture2D(uNormalMap, uv2).xyz * 2.0 - 1.0;
-        vec3 N = normalize(vec3(n1.x + n2.x, 1.35, n1.y + n2.y));
+        /* 波纹法线:四组解析正弦波,波长 18m → 1.2m */
+        vec2 g = vec2(0.0);
+        g += vec2(0.93, 0.37) * (0.090 * cos(dot(p, vec2(0.93, 0.37)) * 0.35 + uTime * 1.05));
+        g += vec2(-0.55, 0.83) * (0.070 * cos(dot(p, vec2(-0.55, 0.83)) * 0.75 + uTime * 1.55));
+        g += vec2(0.20, -0.98) * (0.050 * cos(dot(p, vec2(0.20, -0.98)) * 2.1 + uTime * 2.6)) * lod;
+        g += vec2(-0.87, -0.49) * (0.032 * cos(dot(p, vec2(-0.87, -0.49)) * 5.2 + uTime * 3.9)) * lod;
+        /* 整组法线扰动也按视距压平:几百米外一个像素里挤着好几个波,
+           菲涅尔反射帧帧不同 → 远处海面出一道道条纹。远处就当它是镜面。 */
+        float nk = 1.0 - smoothstep(60.0, 420.0, camD);
+        vec3 N = normalize(vec3(-g.x * nk, 1.0, -g.y * nk));
         vec3 V = normalize(cameraPosition - vWorldPos);
-        float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
 
+        /* 深浅 + 天色反射 */
         vec3 base = mix(uShallow, uDeep, clamp(depth / 7.0, 0.0, 1.0));
-        vec3 col = mix(base, uSky, fres * 0.78);
+        float F = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+        float refl = clamp(pow(F, 0.85) * 0.78 + 0.03, 0.0, 1.0);
+        vec3 col = mix(base, uSky, refl);
+
+        /* 太阳高光:近处锐、远处粗(又宽又淡,不闪点) */
         vec3 H = normalize(uSunDir + V);
-        float spec = pow(max(dot(N, H), 0.0), 240.0) * 2.4;
-        col += uSunColor * spec * clamp(uSunDir.y * 5.0, 0.0, 1.0);
+        float shin = mix(48.0, 340.0, lod);
+        float spec = pow(max(dot(N, H), 0.0), shin) * (shin + 8.0) * 0.018 * mix(0.35, 0.6, lod);
+        col += uSunColor * spec * clamp(uSunDir.y * 6.0, 0.0, 1.0);
 
-        float band = smoothstep(2.8, 0.5, depth);
-        float inland = smoothstep(1.6, 0.3, th);          // 离岸渐隐:内陆洼地不画水
-        band *= inland;
-        float fz = texture2D(uNormalMap, vWorldPos.xz * 0.09 + vec2(uTime * 0.045, 0.0)).z;
-        float foam = band * smoothstep(0.62, 0.86, fz * 0.5 + 0.5 + 0.14 * sin(uTime * 2.2 + th * 4.0));
-        col = mix(col, vec3(0.93, 0.97, 1.0), foam * 0.85);
+        /* 浪线:噪声等值线,成片的白线缓缓移动 */
+        float lv = vnoise(p * 0.055 + vec2(uTime * 0.02, -uTime * 0.008)) * 3.0
+                 + vnoise(p * 0.16 - vec2(uTime * 0.012, uTime * 0.009) + 5.0) * 0.7;
+        float iso = abs(fract(lv + 0.5) - 0.5);
+        float lines = 1.0 - smoothstep(0.0, fwidth(lv) * 1.2 + 1e-4, iso);
+        lines *= step(0.56, vnoise(p * 0.09 + 13.0)) * smoothstep(1.6, 5.0, depth) * lod * inland;   // 只留四成多海面
 
-        float alpha = clamp(depth / 1.8, 0.14, 1.0);
+        /* 岸边泡沫:两三条往岸上推的白带 + 贴岸的一圈白边 */
+        float wob = vnoise(p * 0.33 + 3.0) - 0.5;
+        float dd = depth + wob * 0.7;
+        float push = sin(dd * 3.0 - uTime * 1.9 + wob * 4.0);
+        // 泡沫带只在 0.9~4m 深的水里成带;更浅的地方(潟湖)会碎成一堆白斑,让它淡出
+        float band = smoothstep(0.62, 0.94, push) * smoothstep(4.2, 0.8, dd) * smoothstep(0.3, 1.1, dd);
+        float shore = smoothstep(0.55, 0.08, dd);
+        float foam = clamp(band * 0.6 + shore, 0.0, 1.0) * inland;
+
+        /* 泡沫/浪线的白跟着天色走:夜里天色暗,纯白的沫在深色海面上就是奶牛斑 */
+        vec3 foamCol = vec3(0.97, 0.995, 1.0) * clamp(dot(uSky, vec3(0.2126, 0.7152, 0.0722)) * 2.5, 0.08, 1.0);
+        col = mix(col, foamCol, lines * 0.42);
+        col = mix(col, foamCol, foam);
+        float alpha = clamp(mix(0.42, 1.0, smoothstep(0.0, 2.6, dd)), 0.0, 1.0);
         alpha = max(alpha, foam) * inland;
         gl_FragColor = vec4(col, alpha);
         #include <fog_fragment>
+        /* 收尾:渲染进 HDR 缓冲时是空操作,由后期统一做 */
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.renderOrder = 1;
+  mesh.userData.noInk = true;                 // 半透明,不描边(描了岸线会出双线)
   return { mesh, uniforms: mat.uniforms };
 }

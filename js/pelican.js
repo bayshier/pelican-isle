@@ -232,14 +232,48 @@ export function buildPelican() {
   capBand.rotation.x = -0.12;
   headGroup.add(capBand);
 
-  // 翅膀(搭在车把上)
+  // 翅膀(搭在车把上)。鹈鹕的飞羽是黑的:翼尖用深色,白身子才有识别度
+  const tipMat = new THREE.MeshStandardMaterial({ color: 0x26221f, roughness: 0.8 });
   const wingL = boneMesh(0.095, whiteMat);
   const wingR = boneMesh(0.095, whiteMat);
-  const wingTipL = boneMesh(0.062, whiteMat);
-  const wingTipR = boneMesh(0.062, whiteMat);
+  const wingTipL = boneMesh(0.062, tipMat);
+  const wingTipR = boneMesh(0.062, tipMat);
   pel.add(wingL, wingR, wingTipL, wingTipR);
   const shoulderL = new THREE.Vector3(-0.36, 0.22, 0.05);
   const shoulderR = new THREE.Vector3(0.36, 0.22, 0.05);
+
+  // 红领巾:脖子上一圈 + 一条往后飘的带子。带子每帧重摆顶点(9 节 18 个顶点,很便宜)
+  const scarfMat = new THREE.MeshStandardMaterial({ color: 0xe0463c, roughness: 0.75, side: THREE.DoubleSide });
+  const knot = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.045, 6, 14), scarfMat);
+  knot.position.set(0, 0.26, 0.4);
+  knot.rotation.set(Math.PI / 2 - 0.45, 0, 0);
+  pel.add(knot);
+  const RIB_SEG = 8;
+  const ribGeo = new THREE.PlaneGeometry(1, 1, RIB_SEG, 1);   // 只是借它的索引结构,顶点每帧重写
+  const ribbon = new THREE.Mesh(ribGeo, scarfMat);
+  ribbon.frustumCulled = false;
+  pel.add(ribbon);
+  function updateRibbon(t, speedK, steer) {
+    const pos = ribGeo.attributes.position;
+    const L = 0.72 + speedK * 0.6;                        // 骑得越快飘得越长
+    const droop = (1 - speedK) * 0.34;                    // 停车时垂下来
+    for (let i = 0; i <= RIB_SEG; i++) {
+      const u = i / RIB_SEG;
+      const sway = Math.sin(t * (5 + speedK * 9) - u * 7) * 0.075 * u * (0.25 + speedK);
+      const lift = Math.sin(t * (7 + speedK * 6) - u * 5 + 1.3) * 0.05 * u * (0.3 + speedK) + u * u * 0.12 * speedK;
+      const cx = sway - steer * 0.22 * u * u * speedK;    // 转弯时甩向外侧
+      const cy = 0.24 - droop * u * u + lift;
+      const cz = 0.34 - u * L;
+      const hw = 0.085 * (1 - u * 0.55);                  // 越到尾端越窄
+      // 带子一路拧着往后飘:无论从哪个角度看都有面
+      const tw = u * 2.2 + t * (1.5 + speedK * 5);
+      const wx = Math.sin(tw) * hw, wy = Math.cos(tw) * hw;
+      pos.setXYZ(i, cx - wx, cy - wy, cz);
+      pos.setXYZ(RIB_SEG + 1 + i, cx + wx, cy + wy, cz);
+    }
+    pos.needsUpdate = true;
+    ribGeo.computeVertexNormals();
+  }
 
   // 腿(IK)
   const thighL = boneMesh(0.05, legMat), shinL = boneMesh(0.04, legMat);
@@ -332,6 +366,7 @@ export function buildPelican() {
       const roll = -steer * 0.34 * speedK;
       lean.rotation.z = THREE.MathUtils.lerp(lean.rotation.z, roll, 0.12);
       lean.position.y = Math.sin(crankRot * 2) * 0.018 * speedK + (s.hopAir ? 0.04 : 0);
+      updateRibbon(t, speedK, steer);
 
       // 铃铛脉冲
       if (bellT < 1) {

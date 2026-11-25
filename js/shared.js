@@ -5,8 +5,11 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 export const uTime = { value: 0 };
 
 // sRGB hex -> 线性 Color(用于顶点色)
+// 注意:r160 开着色彩管理,new Color(hex) 本身就已经转到了线性空间;
+// 旧版这里又调了一次 convertSRGBToLinear()(转了两次)→ 顶点色的地形/植被/建筑
+// 比设计值又暗又脏,而用 uniform 上色的材质(鹈鹕本体等)是正常的。
 export function C(hex, mul = 1) {
-  const c = new THREE.Color(hex).convertSRGBToLinear();
+  const c = new THREE.Color(hex);
   if (mul !== 1) c.multiplyScalar(mul);
   return c;
 }
@@ -62,6 +65,24 @@ export function merge(list) {
   return g;
 }
 
+// 风摆:往标准材质的顶点着色器里注入「按 aSway 权重左右摇摆」。
+// 描边预通道的法线材质也要用这同一份(style.js),否则树冠的描边和本体错位。
+export function injectWind(sh) {
+  sh.uniforms.uTime = uTime;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute float aSway;\nuniform float uTime;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+        float wph = dot(ip, vec3(0.213, 0.417, 0.311)) * 6.2831;
+      #else
+        float wph = 0.0;
+      #endif
+      float wsw = aSway * aSway;
+      transformed.x += (sin(uTime * 1.9 + wph) + sin(uTime * 3.3 + wph * 1.7) * 0.45) * wsw * 0.4;
+      transformed.z += cos(uTime * 1.55 + wph * 1.3) * wsw * 0.28;`);
+}
+
 // 标准 vertexColors 材质;wind=true 时注入风摆 shader
 export function makeMat(wind = false, opts = {}) {
   const mat = new THREE.MeshStandardMaterial({
@@ -69,21 +90,8 @@ export function makeMat(wind = false, opts = {}) {
     envMapIntensity: opts.env ?? 0.4,
   });
   if (wind) {
-    mat.onBeforeCompile = (sh) => {
-      sh.uniforms.uTime = uTime;
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute float aSway;\nuniform float uTime;')
-        .replace('#include <begin_vertex>', `#include <begin_vertex>
-        #ifdef USE_INSTANCING
-          vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
-          float wph = dot(ip, vec3(0.213, 0.417, 0.311)) * 6.2831;
-        #else
-          float wph = 0.0;
-        #endif
-        float wsw = aSway * aSway;
-        transformed.x += (sin(uTime * 1.9 + wph) + sin(uTime * 3.3 + wph * 1.7) * 0.45) * wsw * 0.4;
-        transformed.z += cos(uTime * 1.55 + wph * 1.3) * wsw * 0.28;`);
-    };
+    mat.onBeforeCompile = injectWind;
+    // 必须设置缓存键:否则和别的"同参数但着色器不同"的材质串用一个程序
     mat.customProgramCacheKey = () => 'windv1';
   }
   return mat;

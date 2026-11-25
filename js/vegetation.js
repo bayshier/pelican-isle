@@ -240,6 +240,8 @@ export function buildVegetation(scene) {
     im.instanceMatrix.needsUpdate = true;
     im.castShadow = true;
     im.receiveShadow = true;
+    // 草丛和花是几像素宽的双面薄片:描边预通道里法线正反翻,整片都会被涂黑 → 不描边
+    if (key === 'grass' || key.startsWith('flower')) im.userData.noInk = true;
     scene.add(im);
     meshes.push(im);
   }

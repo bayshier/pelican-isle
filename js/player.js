@@ -22,7 +22,8 @@ export function spawnFish(scene) {
     m.position.set(x, h, z);
     m.castShadow = true;
     scene.add(m);
-    list.push({ m, x, z, y: h, taken: false, ph: rng() * 10 });
+    // idx 是这条鱼的编号:世界生成用固定种子,每次进入都一样 → 可以存进合集的"图鉴"
+    list.push({ m, x, z, y: h, taken: false, ph: rng() * 10, idx: list.length });
   };
   // 沿环岛路撒
   for (let i = 6; i < 760; i += 26) {
@@ -76,6 +77,7 @@ export class Player {
     this.normalS = new THREE.Vector3(0, 1, 0);
     this.visited = new Set();
     this.dustAcc = 0;
+    this.landK = 0;                 // 落地反馈:1 → 0 衰减,期间镜头下压
     this.fish = [];
 
     this.keys = {};
@@ -96,6 +98,13 @@ export class Player {
   }
 
   setFish(list) { this.fish = list; }
+
+  /* 只摆模型、不推进物理:标题页不跑 update(),也要让鹈鹕站在村里 */
+  syncRig(t) {
+    this.rig.root.position.copy(this.pos);
+    this.rig.root.rotation.set(0, this.heading, 0);
+    this.rig.update(0, { speed: 0, steer: 0, t, hopAir: false });
+  }
 
   reset() {
     this.pos.set(SITES.village.x, terrainHeight(SITES.village.x, SITES.village.z + 30), SITES.village.z + 30);
@@ -148,7 +157,15 @@ export class Player {
     if (this.airborne) {
       this.vy -= 19 * dt;
       this.pos.y += this.vy * dt;
-      if (this.pos.y <= ground) { this.pos.y = ground; this.airborne = false; this.vy = 0; }
+      if (this.pos.y <= ground) {
+        this.pos.y = ground; this.airborne = false; this.vy = 0;
+        // 落地反馈:后轮扬一圈尘 + 镜头轻沉一下
+        this.particles.dust.spawn(new THREE.Vector3(this.pos.x, this.pos.y + 0.12, this.pos.z), 9, {
+          color: roadK > 0.5 ? [new THREE.Color('#cdb488')] : [new THREE.Color('#7da05a'), new THREE.Color('#a8ba58')],
+          vy: 0.9, jit: 2.4, size: 1.6, life: 0.55, grav: 2.6, a: 0.4,
+        });
+        this.landK = 1;
+      }
     } else {
       this.pos.y = lerp(this.pos.y, ground, 1 - Math.exp(-22 * dt));
     }
@@ -197,7 +214,7 @@ export class Player {
           color: [new THREE.Color('#ffd97a'), new THREE.Color('#f5c542'), new THREE.Color('#fff2c8')],
           vy: 2.6, jit: 3.2, size: 1.1, life: 0.85, grav: 3.4, a: 0.9,
         });
-        this.onCollect();
+        this.onCollect(f);                 // 把鱼本身交给回调(合集接入要用它的编号)
       }
     }
   }
@@ -244,6 +261,10 @@ export class Player {
     }
     const groundMin = terrainHeight(desired.x, desired.z) + 0.7;
     if (desired.y < groundMin) desired.y = groundMin;
+    if (this.landK > 0) {                       // 落地后镜头往下沉一点再弹回
+      desired.y -= 0.3 * this.landK;
+      this.landK = Math.max(0, this.landK - dt * 3.2);
+    }
     const kk = 1 - Math.exp(-(this.camMode === 0 ? 5.2 : 3.4) * dt);
     this.camPos.lerp(desired, kk);
     this.camLook.lerp(look, 1 - Math.exp(-8 * dt));

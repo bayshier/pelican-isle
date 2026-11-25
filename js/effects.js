@@ -90,44 +90,56 @@ export class ParticlePool {
 }
 
 // ── 电影感调色 ────────────────────────────────────────────────
+// 这个 pass 在 OutputPass 之前,处理的是 HDR 线性值(可能 > 1)。
+// 对比度的 S 曲线必须先夹到 0..1 再做:直接对 >1 的值做 c²(3-2c) 会翻成负数。
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
     uRes: { value: new THREE.Vector2(1, 1) },
-    uVignette: { value: 0.32 },
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse;
-    uniform float uTime, uVignette;
+    uniform float uTime;
     uniform vec2 uRes;
     varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec2 c = vUv - 0.5;
       float r = length(c);
-      float ca = 0.0022 * r * r;
+      float ca = 0.0015 * r * r;                     // 色差:只出现在四角
       vec3 col;
       col.r = texture2D(tDiffuse, vUv + c * ca).r;
       col.g = texture2D(tDiffuse, vUv).g;
       col.b = texture2D(tDiffuse, vUv - c * ca).b;
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-      col = mix(vec3(l), col, 1.13);
-      col *= 1.0 - uVignette * smoothstep(0.32, 0.85, r);
-      float g = fract(sin(dot(vUv * uRes + vec2(uTime * 61.0, uTime * 83.0), vec2(12.9898, 78.233))) * 43758.5453);
-      col += (g - 0.5) * 0.024;
+      col = mix(vec3(l), col, 1.14);                 // 饱和
+      vec3 s = clamp(col, 0.0, 1.0);
+      col = mix(col, s * s * (3.0 - 2.0 * s), 0.14); // 对比
+      col *= 1.0 - 0.26 * smoothstep(0.32, 0.85, r); // 暗角
+      /* 颗粒:按亮度缩放。固定幅度的颗粒在夜景的暗部会被相对放大成一层噪点 */
+      float lum2 = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col += (hash(vUv * uRes + vec2(uTime * 61.0, uTime * 83.0)) - 0.5) * 0.010 * smoothstep(0.02, 0.25, lum2);
       gl_FragColor = vec4(col, 1.0);
     }`,
 };
 
-export function buildComposer(renderer, scene, camera) {
+/**
+ * 后期管线:场景 → 墨线描边 → 泛光 → 调色 → ACES 输出
+ * ink 可传 null(低画质不描边)
+ */
+export function buildComposer(renderer, scene, camera, ink = null) {
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.32, 0.45, 1.15);
+  if (ink) composer.addPass(ink);
+  // 阈值必须 > 1(见 REBUILD_SPEC「白材质 bloom 阈值」):整屏不到 1 的亮度不该发光,
+  // 只有日轮 / 灯火 / 高光碎金这类 HDR 值才泛光
+  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.42, 0.55, 1.25);
   composer.addPass(bloom);
   const grade = new ShaderPass(GradeShader);
   composer.addPass(grade);
@@ -194,9 +206,22 @@ export function buildAmbient(scene) {
   }
   const fg = new THREE.BufferGeometry();
   fg.setAttribute('position', new THREE.BufferAttribute(fp, 3));
+  // 萤火虫(夜间):柔光点精灵。
+  // 尺寸不随距离衰减、固定几个像素 —— 旧版按距离放大,飞到镜头前就是占半屏的糊斑
+  const glowCv = document.createElement('canvas');
+  glowCv.width = glowCv.height = 32;
+  {
+    const g = glowCv.getContext('2d');
+    const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gr.addColorStop(0, 'rgba(255,255,255,1)');
+    gr.addColorStop(0.3, 'rgba(255,255,255,0.75)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 32, 32);
+  }
   const fMat = new THREE.PointsMaterial({
-    color: 0xd8ffa0, size: 0.5, transparent: true, opacity: 0,
-    depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    color: 0xd8ffa0, size: 4, sizeAttenuation: false, map: new THREE.CanvasTexture(glowCv),
+    transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
   });
   const fireflies = new THREE.Points(fg, fMat);
   fireflies.frustumCulled = false;
